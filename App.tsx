@@ -6,7 +6,7 @@ import {
   Activity, Disc, History, AudioWaveform, Clock, 
   ChevronRight, XCircle, VolumeX, Volume1, Layers, Mic2, Sparkles, ExternalLink, RefreshCw,
   Timer, Download, Zap, Hash, BrainCircuit, ListMusic, Ghost, User, Bot, Stars, ZapOff,
-  MoveUp, MoveDown, Loader2
+  MoveUp, MoveDown, Loader2, Headphones
 } from 'lucide-react';
 import { INSTRUMENTS } from './constants';
 import { Instrument, WorkstationMode, RecordedNote, StudioSession, ScaleType } from './types';
@@ -136,6 +136,7 @@ const App: React.FC = () => {
   const [rmsVolume, setRmsVolume] = useState(0);
   const [sensitivity, setSensitivity] = useState(0.012); 
   const [micBoost, setMicBoost] = useState(3.0); 
+  const [isMonitorOn, setIsMonitorOn] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
   const [activeTab, setActiveTab] = useState<'BROWSER' | 'VAULT'>('BROWSER');
   const [isInstrumentLoading, setIsInstrumentLoading] = useState(false);
@@ -178,6 +179,7 @@ const App: React.FC = () => {
     lastMidi: null as number | null,
     sensitivity: 0.012,
     micBoost: 3.0,
+    isMonitorOn: true,
     scale: 'CHROMATIC' as ScaleType,
     voiceEffect: 'NORMAL' as VoiceEffect,
     voicePitchOffset: 0
@@ -199,26 +201,27 @@ const App: React.FC = () => {
     stateRef.current = { 
       ...stateRef.current,
       mode, isRecording, isPlayingBack: !!isPlayingBack, 
-      sensitivity, micBoost,
+      sensitivity, micBoost, isMonitorOn,
       scale: currentScale,
       voiceEffect,
       voicePitchOffset
     };
     
+    // Gestione Volume Sampler: monitoring spento = muto totale durante l'uso live/rec
     const isPlaybackMidi = isPlayingBack?.includes('_midi');
-    const isLiveMidiFeedback = (mode === WorkstationMode.MIDI || mode === WorkstationMode.RECORD);
+    const isLiveMidiFeedback = isMonitorOn && (mode === WorkstationMode.MIDI || mode === WorkstationMode.RECORD);
     const vol = (isPlaybackMidi || isLiveMidiFeedback) ? 6 : -Infinity;
 
     if (samplerRef.current) {
-      samplerRef.current.volume.rampTo(vol, 0.05);
+      samplerRef.current.volume.rampTo(vol, 0.05); // Transizione dolce per evitare pop
     }
     
     if (voicePassthroughRef.current) {
-      voicePassthroughRef.current.gain.value = (mode === WorkstationMode.VOICE) ? 1 : 0;
+      voicePassthroughRef.current.gain.value = (isMonitorOn && mode === WorkstationMode.VOICE) ? 1 : 0;
     }
 
     applyVoiceEffect(voiceEffect, voicePitchOffset);
-  }, [mode, isRecording, isPlayingBack, sensitivity, micBoost, currentScale, voiceEffect, voicePitchOffset]);
+  }, [mode, isRecording, isPlayingBack, sensitivity, micBoost, isMonitorOn, currentScale, voiceEffect, voicePitchOffset]);
 
   useEffect(() => {
     return () => {
@@ -425,7 +428,8 @@ const App: React.FC = () => {
             }
           }
           
-          if (samplerRef.current.loaded) {
+          // Suona solo se il monitor è attivo
+          if (samplerRef.current.loaded && stateRef.current.isMonitorOn) {
             samplerRef.current.triggerAttack(noteName);
           }
           
@@ -561,12 +565,19 @@ const App: React.FC = () => {
           </div>
           <div>
             <h1 className="text-sm font-black uppercase tracking-tighter text-white">VocalSynth<span className="text-purple-500">Pro</span></h1>
-            <p className="text-[7px] font-bold text-zinc-500 uppercase tracking-widest">Pure Engine v8.5</p>
+            <p className="text-[7px] font-bold text-zinc-500 uppercase tracking-widest">Feedback Control v9.0</p>
           </div>
         </div>
         <div className="flex items-center gap-3">
            {isStarted && (
             <>
+              <button 
+                onClick={() => setIsMonitorOn(!isMonitorOn)} 
+                className={`p-2.5 rounded-full border border-white/5 transition-all ${isMonitorOn ? 'bg-emerald-600 text-white' : 'bg-zinc-800 text-zinc-500'}`}
+                title={isMonitorOn ? "Monitor On" : "Silent Mode"}
+              >
+                {isMonitorOn ? <Volume2 size={18} /> : <VolumeX size={18} />}
+              </button>
               <div className="flex bg-zinc-900 rounded-full px-3 py-1.5 items-center gap-2 border border-white/5">
                 <Timer size={12} className={isMetronomeActive ? 'text-emerald-500 animate-pulse' : 'text-zinc-600'} />
                 <input type="number" value={bpm} onChange={(e) => setBpm(Number(e.target.value))} className="bg-transparent w-8 text-[10px] font-black outline-none text-center" />
@@ -617,7 +628,9 @@ const App: React.FC = () => {
              <div className="bg-zinc-900/50 p-4 rounded-2xl border border-white/5 flex flex-col gap-2 shadow-inner">
                 <span className="text-[7px] font-black text-zinc-600 tracking-widest uppercase">Real-Time Note</span>
                 <div className="flex items-center justify-between h-full">
-                   <span className="text-[13px] font-black text-purple-400 font-mono leading-none tracking-tighter">{currentMidiNote ? midiToNoteName(currentMidiNote) : '--'}</span>
+                   <span className={`text-[13px] font-black font-mono leading-none tracking-tighter ${currentMidiNote ? (isMonitorOn ? 'text-purple-400' : 'text-emerald-400 animate-pulse') : 'text-zinc-700'}`}>
+                      {currentMidiNote ? midiToNoteName(currentMidiNote) : '--'}
+                   </span>
                    <div className={`w-3 h-3 rounded-full transition-all ${rmsVolume > sensitivity ? 'bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.5)]' : 'bg-zinc-800'}`} />
                 </div>
              </div>
@@ -735,16 +748,25 @@ const App: React.FC = () => {
         <div className="fixed bottom-4 left-4 right-4 z-[60]">
           <div className="bg-zinc-950/95 backdrop-blur-3xl border border-white/20 p-3 rounded-[1.8rem] flex items-center justify-between shadow-2xl ring-1 ring-white/10">
             <div className="flex items-center gap-3">
-              <div className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all duration-100 ${isRecording ? 'bg-red-600 shadow-[0_0_15px_rgba(220,38,38,0.4)]' : mode === WorkstationMode.VOICE ? 'bg-blue-600 shadow-[0_0_15px_rgba(37,99,235,0.4)]' : 'bg-zinc-900 text-zinc-500'}`}>
-                {isRecording ? <Disc size={20} className="animate-spin-slow" /> : mode === WorkstationMode.VOICE ? <Mic size={20} /> : <AudioWaveform size={20} />}
-              </div>
+              <button 
+                onClick={() => setIsMonitorOn(!isMonitorOn)} 
+                className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all duration-100 ${!isMonitorOn ? 'bg-amber-600 shadow-[0_0_15px_rgba(245,158,11,0.4)]' : isRecording ? 'bg-red-600 shadow-[0_0_15px_rgba(220,38,38,0.4)]' : mode === WorkstationMode.VOICE ? 'bg-blue-600 shadow-[0_0_15px_rgba(37,99,235,0.4)]' : 'bg-zinc-900 text-zinc-500'}`}
+              >
+                {!isMonitorOn ? <VolumeX size={20} /> : isRecording ? <Disc size={20} className="animate-spin-slow" /> : mode === WorkstationMode.VOICE ? <Mic size={20} /> : <AudioWaveform size={20} />}
+              </button>
               <div className="flex flex-col">
-                <p className="text-[8px] font-black uppercase text-zinc-500 tracking-[0.1em]">{isRecording ? 'RECORDING' : `REAL-TIME ${mode}`}</p>
-                <span className="text-[12px] font-black font-mono text-zinc-200 tracking-tight leading-none mt-1">{currentMidiNote ? midiToNoteName(currentMidiNote) : mode === WorkstationMode.VOICE ? `${voiceEffect}` : 'READY'}</span>
+                <p className="text-[8px] font-black uppercase text-zinc-500 tracking-[0.1em]">{!isMonitorOn ? 'SILENT MODE' : isRecording ? 'RECORDING' : `REAL-TIME ${mode}`}</p>
+                <span className={`text-[12px] font-black font-mono tracking-tight leading-none mt-1 transition-colors ${currentMidiNote && !isMonitorOn ? 'text-emerald-400' : 'text-zinc-200'}`}>
+                  {currentMidiNote ? midiToNoteName(currentMidiNote) : mode === WorkstationMode.VOICE ? `${voiceEffect}` : 'READY'}
+                </span>
               </div>
             </div>
             
             <div className="flex items-center gap-4 pr-2">
+              <div className="flex flex-col items-end mr-1">
+                 {!isMonitorOn && <span className="text-[6px] font-black text-amber-500 animate-pulse uppercase tracking-widest">Feedback Blocked</span>}
+                 {isMonitorOn && <span className="text-[6px] font-black text-zinc-600 uppercase tracking-widest">Monitoring On</span>}
+              </div>
               <button onClick={stopAllPlayback} className="p-2 bg-zinc-900 rounded-xl border border-white/5 text-zinc-600 hover:text-white transition-all active:scale-90"><Square size={16} fill="currentColor" /></button>
               <div className="border-l border-white/10 pl-4 flex items-center h-8">
                  <p className={`text-4xl font-mono font-black italic tracking-tighter transition-all duration-100 leading-none ${currentMidiNote ? 'text-purple-500 drop-shadow-[0_0_10px_rgba(168,85,247,0.4)]' : 'text-zinc-900'}`}>{currentMidiNote ? String(midiToNoteName(currentMidiNote)).replace(/\d+/g, '') : '--'}</p>
@@ -760,12 +782,19 @@ const App: React.FC = () => {
               <button onClick={() => setShowSettings(false)} className="absolute top-8 right-8 text-zinc-500 p-2"><XCircle size={22} /></button>
               <h3 className="text-2xl font-black uppercase italic mb-10 text-white border-b border-white/5 pb-6 tracking-tighter">Preferences</h3>
               <div className="space-y-10">
+                <div className="p-4 bg-zinc-900 rounded-2xl border border-white/5 flex items-center gap-4">
+                  <div className="w-10 h-10 bg-emerald-600 rounded-xl flex items-center justify-center"><Headphones size={20} /></div>
+                  <div className="flex-1">
+                    <p className="text-[10px] font-black uppercase">Consiglio Studio</p>
+                    <p className="text-[8px] text-zinc-500 leading-tight">Usa le cuffie per evitare che il microfono riascolti il suono degli strumenti.</p>
+                  </div>
+                </div>
                 <div className="space-y-4">
-                  <div className="flex justify-between text-[11px] font-black uppercase text-zinc-500"><span>Noise Gate</span></div>
+                  <div className="flex justify-between text-[11px] font-black uppercase text-zinc-500"><span>Noise Gate (Sensibilità)</span></div>
                   <input type="range" min="0.001" max="0.1" step="0.001" value={sensitivity} onChange={(e) => setSensitivity(parseFloat(e.target.value))} className="w-full h-2 bg-zinc-900 rounded-full appearance-none accent-red-600 slider-custom" />
                 </div>
                 <div className="space-y-4">
-                  <div className="flex justify-between text-[11px] font-black uppercase text-zinc-500"><span>Input Boost</span></div>
+                  <div className="flex justify-between text-[11px] font-black uppercase text-zinc-500"><span>Input Boost (Mic)</span></div>
                   <input type="range" min="1" max="15" step="0.5" value={micBoost} onChange={(e) => setMicBoost(parseFloat(e.target.value))} className="w-full h-2 bg-zinc-900 rounded-full appearance-none accent-purple-500 slider-custom" />
                 </div>
               </div>

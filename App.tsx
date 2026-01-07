@@ -205,6 +205,7 @@ const App: React.FC = () => {
       voicePitchOffset
     };
     
+    // Logica Volume: lo strumento suona se siamo in modalità MIDI o se stiamo riproducendo un MIDI dal Vault
     const isPlaybackMidi = isPlayingBack?.includes('_midi');
     const isLiveMidiFeedback = (mode === WorkstationMode.MIDI || mode === WorkstationMode.RECORD);
     const vol = (isPlaybackMidi || isLiveMidiFeedback) ? 6 : -Infinity;
@@ -276,8 +277,8 @@ const App: React.FC = () => {
   };
 
   const applyInstrumentSettings = useCallback((instrumentId: string): Promise<void> => {
-    return new Promise((resolve) => {
-      if (!samplerRef.current || !mainFxRef.current || !vibratoRef.current) {
+    return new Promise((resolve, reject) => {
+      if (!mainFxRef.current || !vibratoRef.current) {
         resolve();
         return;
       }
@@ -293,19 +294,25 @@ const App: React.FC = () => {
       
       const config = SAMPLE_MAPS[instrumentId] || SAMPLE_MAPS['concert-grand'];
       
-      samplerRef.current.releaseAll();
-      samplerRef.current.dispose();
+      if (samplerRef.current) {
+        samplerRef.current.releaseAll();
+        samplerRef.current.dispose();
+      }
       
       const newSampler = new Tone.Sampler({
         urls: config.urls,
         baseUrl: config.baseUrl,
         onload: () => {
           setIsInstrumentLoading(false);
+          samplerRef.current = newSampler;
           resolve();
+        },
+        onerror: (err) => {
+          console.error("Sampler loading error:", err);
+          setIsInstrumentLoading(false);
+          reject(err);
         }
       }).connect(vibratoRef.current);
-      
-      samplerRef.current = newSampler;
       
       if (instrument.category === 'STRINGS' || instrument.category === 'REED' || instrument.category === 'BRASS') {
         vibratoRef.current.depth.value = 0.15;
@@ -316,12 +323,9 @@ const App: React.FC = () => {
   }, []);
 
   const initAudioCore = async () => {
-    if (Tone.context.latencyHint !== 'interactive') {
-      const newContext = new Tone.Context({ latencyHint: 'interactive' });
-      Tone.setContext(newContext);
+    if (Tone.context.state !== 'running') {
+      await Tone.start();
     }
-    
-    await Tone.start();
     
     if (samplerRef.current) return true;
 
@@ -517,20 +521,30 @@ const App: React.FC = () => {
     if (isPlayingBack) stopAllPlayback();
     
     setIsPlayingBack(session.id + "_loading");
-    await applyInstrumentSettings(session.instrumentId);
-    
-    setIsPlayingBack(session.id + "_midi");
-    const now = Tone.now() + 0.1;
-    let maxDuration = 0;
-    
-    session.midiNotes.forEach(n => {
-      samplerRef.current?.triggerAttackRelease(n.note, n.duration, now + n.time);
-      maxDuration = Math.max(maxDuration, n.time + n.duration);
-    });
-    
-    setTimeout(() => {
+    try {
+      await applyInstrumentSettings(session.instrumentId);
+      
+      // Assicura che il volume sia alto durante il playback del Vault
+      if (samplerRef.current) {
+        samplerRef.current.volume.value = 6;
+      }
+
+      setIsPlayingBack(session.id + "_midi");
+      const now = Tone.now() + 0.1;
+      let maxDuration = 0;
+      
+      session.midiNotes.forEach(n => {
+        samplerRef.current?.triggerAttackRelease(n.note, n.duration, now + n.time);
+        maxDuration = Math.max(maxDuration, n.time + n.duration);
+      });
+      
+      setTimeout(() => {
+        setIsPlayingBack(null);
+      }, (maxDuration * 1000) + 1000);
+    } catch (e) {
+      console.error("Replay failed:", e);
       setIsPlayingBack(null);
-    }, (maxDuration * 1000) + 1000);
+    }
   };
 
   const playSessionAudio = (session: StudioSession) => {
@@ -561,7 +575,7 @@ const App: React.FC = () => {
           </div>
           <div>
             <h1 className="text-sm font-black uppercase tracking-tighter text-white">VocalSynth<span className="text-purple-500">Pro</span></h1>
-            <p className="text-[7px] font-bold text-zinc-500 uppercase tracking-widest">Pure Engine v8.5</p>
+            <p className="text-[7px] font-bold text-zinc-500 uppercase tracking-widest">Studio Engine v9.2</p>
           </div>
         </div>
         <div className="flex items-center gap-3">
@@ -715,7 +729,7 @@ const App: React.FC = () => {
                       <button 
                         onClick={() => playSessionMidi(s)} 
                         disabled={isPlayingBack === s.id + "_loading"}
-                        className={`py-4 rounded-xl text-[10px] font-black uppercase flex items-center justify-center gap-3 transition-all ${isPlayingBack === s.id + "_midi" ? 'bg-purple-600 text-white shadow-lg' : isPlayingBack === s.id + "_loading" ? 'bg-zinc-800 text-zinc-400' : 'bg-black active:bg-zinc-900'}`}
+                        className={`py-4 rounded-xl text-[10px] font-black uppercase flex items-center justify-center gap-3 transition-all ${isPlayingBack === s.id + "_midi" ? 'bg-purple-600 text-white shadow-lg' : isPlayingBack === s.id + "_loading" ? 'bg-zinc-800 text-zinc-400 animate-pulse' : 'bg-black active:bg-zinc-900'}`}
                       >
                         {isPlayingBack === s.id + "_loading" ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} fill="currentColor" />}
                         {isPlayingBack === s.id + "_loading" ? "LOADING..." : "MIDI REPLAY"}
@@ -745,7 +759,7 @@ const App: React.FC = () => {
             </div>
             
             <div className="flex items-center gap-4 pr-2">
-              <button onClick={stopAllPlayback} className="p-2 bg-zinc-900 rounded-xl border border-white/5 text-zinc-600 hover:text-white transition-all active:scale-90"><Square size={16} fill="currentColor" /></button>
+              <button onClick={stopAllPlayback} className="p-2 bg-zinc-900 rounded-xl border border-white/5 text-zinc-600 hover:text-white transition-all active:scale-90 shadow-md"><Square size={16} fill="currentColor" /></button>
               <div className="border-l border-white/10 pl-4 flex items-center h-8">
                  <p className={`text-4xl font-mono font-black italic tracking-tighter transition-all duration-100 leading-none ${currentMidiNote ? 'text-purple-500 drop-shadow-[0_0_10px_rgba(168,85,247,0.4)]' : 'text-zinc-900'}`}>{currentMidiNote ? String(midiToNoteName(currentMidiNote)).replace(/\d+/g, '') : '--'}</p>
               </div>
@@ -761,11 +775,11 @@ const App: React.FC = () => {
               <h3 className="text-2xl font-black uppercase italic mb-10 text-white border-b border-white/5 pb-6 tracking-tighter">Preferences</h3>
               <div className="space-y-10">
                 <div className="space-y-4">
-                  <div className="flex justify-between text-[11px] font-black uppercase text-zinc-500"><span>Noise Gate</span></div>
+                  <div className="flex justify-between text-[11px] font-black uppercase text-zinc-500"><span>Noise Gate (Sensibilità)</span></div>
                   <input type="range" min="0.001" max="0.1" step="0.001" value={sensitivity} onChange={(e) => setSensitivity(parseFloat(e.target.value))} className="w-full h-2 bg-zinc-900 rounded-full appearance-none accent-red-600 slider-custom" />
                 </div>
                 <div className="space-y-4">
-                  <div className="flex justify-between text-[11px] font-black uppercase text-zinc-500"><span>Input Boost</span></div>
+                  <div className="flex justify-between text-[11px] font-black uppercase text-zinc-500"><span>Input Boost (Volume Mic)</span></div>
                   <input type="range" min="1" max="15" step="0.5" value={micBoost} onChange={(e) => setMicBoost(parseFloat(e.target.value))} className="w-full h-2 bg-zinc-900 rounded-full appearance-none accent-purple-500 slider-custom" />
                 </div>
               </div>

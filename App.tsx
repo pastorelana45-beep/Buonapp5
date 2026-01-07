@@ -428,7 +428,7 @@ const App: React.FC = () => {
             }
           }
           
-          // Suona solo se il monitor è attivo
+          // Suona solo se il monitor Ã¨ attivo
           if (samplerRef.current.loaded && stateRef.current.isMonitorOn) {
             samplerRef.current.triggerAttack(noteName);
           }
@@ -718,7 +718,7 @@ const App: React.FC = () => {
                           >
                             {INSTRUMENTS.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
                           </select>
-                          <span className="text-[7px] text-zinc-600 uppercase font-bold pl-1">{new Date(s.timestamp).toLocaleTimeString()} • {s.bpm} BPM</span>
+                          <span className="text-[7px] text-zinc-600 uppercase font-bold pl-1">{new Date(s.timestamp).toLocaleTimeString()} â€¢ {s.bpm} BPM</span>
                        </div>
                        <div className="flex gap-2">
                          <button onClick={() => setSessions(prev => prev.filter(x => x.id !== s.id))} className="text-zinc-700 hover:text-red-500 transition-colors p-2"><Trash2 size={14} /></button>
@@ -790,7 +790,7 @@ const App: React.FC = () => {
                   </div>
                 </div>
                 <div className="space-y-4">
-                  <div className="flex justify-between text-[11px] font-black uppercase text-zinc-500"><span>Noise Gate (Sensibilità)</span></div>
+                  <div className="flex justify-between text-[11px] font-black uppercase text-zinc-500"><span>Noise Gate (SensibilitÃ )</span></div>
                   <input type="range" min="0.001" max="0.1" step="0.001" value={sensitivity} onChange={(e) => setSensitivity(parseFloat(e.target.value))} className="w-full h-2 bg-zinc-900 rounded-full appearance-none accent-red-600 slider-custom" />
                 </div>
                 <div className="space-y-4">

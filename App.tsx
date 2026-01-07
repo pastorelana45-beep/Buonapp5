@@ -205,9 +205,10 @@ const App: React.FC = () => {
       voicePitchOffset
     };
     
-    // Logica Volume: lo strumento suona se siamo in modalità MIDI o se stiamo riproducendo un MIDI dal Vault
+    // Logica Volume: lo strumento suona se siamo in Replay MIDI o se siamo in modalità MIDI LIVE.
+    // Durante la registrazione (WorkstationMode.RECORD), il volume è silenziato per evitare feedback.
     const isPlaybackMidi = isPlayingBack?.includes('_midi');
-    const isLiveMidiFeedback = (mode === WorkstationMode.MIDI || mode === WorkstationMode.RECORD);
+    const isLiveMidiFeedback = (mode === WorkstationMode.MIDI); 
     const vol = (isPlaybackMidi || isLiveMidiFeedback) ? 6 : -Infinity;
 
     if (samplerRef.current) {
@@ -429,6 +430,8 @@ const App: React.FC = () => {
             }
           }
           
+          // triggerAttack viene chiamato per aggiornare lo stato interno del campionatore
+          // ma il suono non si sente se il volume è stato impostato a -Infinity nel useEffect
           if (samplerRef.current.loaded) {
             samplerRef.current.triggerAttack(noteName);
           }

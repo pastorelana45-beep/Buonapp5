@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import * as Tone from 'tone';
 import { 
   Music, Activity, Disc, Square, Download, Trash2, 
-  Layers, Volume2, Settings, Clock, ChevronRight, Zap, Loader2 
+  Layers, Volume2, Zap, Loader2 
 } from 'lucide-react';
 
 // --- UTILS: PITCH DETECTION & MATH ---
@@ -47,8 +47,8 @@ const App: React.FC = () => {
   const [currentNote, setCurrentNote] = useState<string | null>(null);
   const [selectedInst, setSelectedInst] = useState(INSTRUMENTS[0]);
   const [sessions, setSessions] = useState<any[]>([]);
-  const [bpm, setBpm] = useState(120);
   const [isLoaded, setIsLoaded] = useState(false);
+  const [rmsVolume, setRmsVolume] = useState(0); // <--- AGGIUNTO QUESTO STATO MANCANTE
 
   // --- REFS AUDIO ---
   const samplerRef = useRef<Tone.Sampler | null>(null);
@@ -60,7 +60,6 @@ const App: React.FC = () => {
   const initEngine = async () => {
     await Tone.start();
     
-    // Catena Effetti "Corposa"
     const reverb = new Tone.Reverb({ decay: 4, wet: 0.4 }).toDestination();
     const chorus = new Tone.Chorus(4, 2.5, 0.5).connect(reverb).start();
     const distortion = new Tone.Distortion(0.15).connect(chorus);
@@ -89,16 +88,16 @@ const App: React.FC = () => {
 
   // --- AUDIO LOOP ---
   const audioLoop = () => {
-    if (!analyserRef.current || !samplerRef.current || mode !== 'MIDI') {
-      if (mode !== 'MIDI') { samplerRef.current?.releaseAll(); setCurrentNote(null); }
+    if (!analyserRef.current || !samplerRef.current) {
       requestAnimationFrame(audioLoop);
       return;
     }
 
     const buffer = analyserRef.current.getValue() as Float32Array;
     const rms = calculateRMS(buffer);
+    setRmsVolume(rms); // Aggiorna la barra del volume
 
-    if (rms > 0.02) {
+    if (mode === 'MIDI' && rms > 0.02) {
       const freq = detectPitch(buffer, Tone.getContext().sampleRate);
       if (freq) {
         const midi = Math.round(69 + 12 * Math.log2(freq / 440));
@@ -113,14 +112,15 @@ const App: React.FC = () => {
           setCurrentNote(note);
         }
       }
-    } else if (currentNote) {
-      samplerRef.current.releaseAll();
-      setCurrentNote(null);
+    } else if (mode !== 'MIDI' || rms <= 0.02) {
+      if (currentNote) {
+        samplerRef.current.releaseAll();
+        setCurrentNote(null);
+      }
     }
     requestAnimationFrame(audioLoop);
   };
 
-  // --- LOGICA STRUMENTI E FILE ---
   const changeInstrument = (inst: any) => {
     setIsLoaded(false);
     setSelectedInst(inst);
@@ -146,7 +146,6 @@ const App: React.FC = () => {
 
   return (
     <div className="fixed inset-0 bg-black text-white font-sans flex flex-col overflow-hidden">
-      {/* HEADER */}
       <header className="p-4 bg-zinc-950 border-b border-white/10 flex justify-between items-center z-50">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 bg-purple-600 rounded-lg flex items-center justify-center"><Music size={18}/></div>
@@ -163,31 +162,29 @@ const App: React.FC = () => {
       {!isStarted ? (
         <div className="flex-1 flex flex-col items-center justify-center p-10 text-center">
           <Zap size={64} className="text-purple-500 mb-6 animate-pulse" />
-          <h2 className="text-4xl font-black italic mb-2 tracking-tighter">ULTRA ENGINE</h2>
-          <p className="text-zinc-500 text-xs mb-10 uppercase tracking-widest">High Definition Vocal Processing</p>
+          <h2 className="text-4xl font-black italic mb-2 tracking-tighter uppercase">Ultra Engine</h2>
+          <p className="text-zinc-500 text-[10px] mb-10 uppercase tracking-widest">High Definition Vocal Processing</p>
           <button onClick={initEngine} className="bg-white text-black px-12 py-5 rounded-2xl font-black text-xl shadow-2xl active:scale-95 transition-all">BOOT SYSTEM</button>
         </div>
       ) : (
         <main className="flex-1 flex flex-col p-4 overflow-hidden relative">
-          {/* Controls */}
           <div className="grid grid-cols-2 gap-4 mb-6">
             <button 
               onClick={() => setMode(mode === 'MIDI' ? 'IDLE' : 'MIDI')}
-              className={`p-6 rounded-3xl border-2 flex flex-col items-center gap-2 transition-all ${mode === 'MIDI' ? 'bg-purple-600 border-purple-400' : 'bg-zinc-900 border-transparent text-zinc-500'}`}
+              className={`p-6 rounded-3xl border-2 flex flex-col items-center gap-2 transition-all ${mode === 'MIDI' ? 'bg-purple-600 border-purple-400 shadow-lg shadow-purple-900/40' : 'bg-zinc-900 border-transparent text-zinc-500'}`}
             >
-              <Activity size={24} /> <span className="font-black text-[10px] uppercase">Midi Live</span>
+              <Activity size={24} /> <span className="font-black text-[10px] uppercase tracking-tighter">Midi Live</span>
             </button>
             <button 
               onClick={toggleRecording}
               className={`p-6 rounded-3xl border-2 flex flex-col items-center gap-2 transition-all ${isRecording ? 'bg-red-600 border-red-400 animate-pulse' : 'bg-zinc-900 border-transparent text-zinc-500'}`}
             >
               {isRecording ? <Square fill="white" size={24} /> : <Disc size={24} />} 
-              <span className="font-black text-[10px] uppercase">{isRecording ? 'Stop Rec' : 'Record'}</span>
+              <span className="font-black text-[10px] uppercase tracking-tighter">{isRecording ? 'Stop Rec' : 'Record'}</span>
             </button>
           </div>
 
-          {/* Selector */}
-          <div className="flex-1 overflow-y-auto space-y-4 pb-24 no-scrollbar">
+          <div className="flex-1 overflow-y-auto space-y-4 pb-24 scrollbar-hide">
             <div className="grid grid-cols-2 gap-2">
               {INSTRUMENTS.map(inst => (
                 <button 
@@ -201,15 +198,14 @@ const App: React.FC = () => {
               ))}
             </div>
 
-            {/* Vault */}
             {sessions.length > 0 && (
               <div className="space-y-2 mt-6">
                 <p className="text-[10px] font-black text-zinc-500 uppercase px-2">Vault (MP3 Export)</p>
                 {sessions.map(s => (
                   <div key={s.id} className="p-4 bg-zinc-900 rounded-2xl flex justify-between items-center border border-white/5">
-                    <span className="text-[10px] font-black">TAKE {s.time}</span>
+                    <span className="text-[10px] font-black uppercase">Take {s.time}</span>
                     <div className="flex gap-2">
-                      <button onClick={() => { const a = document.createElement('a'); a.href = s.url; a.download = `VocalSynth_${s.id}.mp3`; a.click(); }} className="p-2 bg-emerald-600 text-white rounded-lg"><Download size={14}/></button>
+                      <button onClick={() => { const a = document.createElement('a'); a.href = s.url; a.download = `VocalSynth_${s.id}.mp3`; a.click(); }} className="p-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-500 transition-colors"><Download size={14}/></button>
                       <button onClick={() => setSessions(sessions.filter(x => x.id !== s.id))} className="p-2 bg-zinc-800 text-zinc-500 rounded-lg"><Trash2 size={14}/></button>
                     </div>
                   </div>
@@ -220,16 +216,15 @@ const App: React.FC = () => {
         </main>
       )}
 
-      {/* FOOTER NOTE STATUS */}
       {isStarted && (
         <div className="p-6 bg-zinc-950 border-t border-white/10 flex justify-between items-center">
           <div>
-            <span className="text-[8px] font-black text-zinc-600 uppercase">Input Pitch</span>
+            <span className="text-[8px] font-black text-zinc-600 uppercase tracking-widest">Pitch</span>
             <div className="text-4xl font-black italic text-purple-500 leading-none">{currentNote || '--'}</div>
           </div>
           {!isLoaded && <Loader2 className="animate-spin text-purple-500" />}
-          <div className="w-20 h-1 bg-zinc-900 rounded-full overflow-hidden">
-             <div className="h-full bg-purple-600 transition-all" style={{ width: `${Math.min(100, rmsVolume * 800)}%` }} />
+          <div className="w-24 h-1.5 bg-zinc-900 rounded-full overflow-hidden">
+             <div className="h-full bg-purple-600 transition-all duration-75" style={{ width: `${Math.min(100, rmsVolume * 800)}%` }} />
           </div>
         </div>
       )}

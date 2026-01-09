@@ -1,36 +1,3 @@
-
-export interface Instrument {
-  id: string;
-  name: string;
-  category: string;
-  icon?: string;
-}
-
-export enum WorkstationMode {
-  IDLE = 'IDLE',
-  MIDI = 'MIDI',
-  VOICE = 'VOICE',
-  RECORD = 'RECORD'
-}
-
-export interface RecordedNote {
-  note: string;
-  time: number;
-  duration: number;
-}
-
-export interface StudioSession {
-  id: string;
-  timestamp: number;
-  midiNotes: RecordedNote[];
-  audioUrl: string;
-  instrumentId: string;
-  bpm: number;
-  scale: string;
-}
-
-export type ScaleType = 'CHROMATIC' | 'MAJOR' | 'MINOR' | 'PENTATONIC';
-
 export enum Category {
   ALL = 'ALL',
   PIANO = 'PIANO',
@@ -44,4 +11,23 @@ export enum Category {
   REED = 'REED',
   SYNTH = 'SYNTH',
   ETHNIC = 'ETHNIC'
+}
+
+export interface Instrument {
+  id: string;
+  name: string;
+  category: Category;
+  icon?: string;
+}
+
+export type ScaleType = 'CHR' | 'MAJ' | 'MIN' | 'PEN';
+
+export interface EngineSettings {
+  transientSensitivity: number; // Valore 0.5 (50%)
+  gateThreshold: number;        // Valore 0.020 RMS
+  sustainDecay: number;         // Valore 1.5s
+  isQuantized: boolean;         // MIDI Quantized
+  isVelocitySensitive: boolean; // Velocity Sensitive
+  noPitchBend: boolean;         // No Pitch Bend
+  currentScale: ScaleType;      // Scala selezionata (CHR, MAJ, ecc.)
 }

@@ -1,15 +1,33 @@
+/**
+ * Calcola l'ampiezza RMS per il GATE THRESHOLD
+ */
+export function calculateRMS(buffer: Float32Array): number {
+  let sum = 0;
+  for (let i = 0; i < buffer.length; i++) {
+    sum += buffer[i] * buffer[i];
+  }
+  return Math.sqrt(sum / buffer.length);
+}
 
 /**
- * Pitch Detection tramite algoritmo YIN ottimizzato per bassa latenza.
+ * Pitch Detection con logica specifica per strumenti percussivi (Piano)
  */
-export function detectPitch(buffer: Float32Array, sampleRate: number): number | null {
+export function detectPitch(
+  buffer: Float32Array, 
+  sampleRate: number, 
+  settings: EngineSettings
+): number | null {
+  
+  // 1. Controllo GATE (0.020 RMS dallo screenshot)
+  const rms = calculateRMS(buffer);
+  if (rms < settings.gateThreshold) return null;
+
+  // Algoritmo YIN (Logica esistente ottimizzata)
   const threshold = 0.15;
   const SIZE = buffer.length;
-  // Analizziamo solo metà buffer per dimezzare i calcoli (sufficiente per frequenze umane)
   const halfSize = Math.floor(SIZE / 2);
   const yinBuffer = new Float32Array(halfSize);
 
-  // Step 1: Difference function (ottimizzata)
   for (let tau = 0; tau < halfSize; tau++) {
     let diff = 0;
     for (let i = 0; i < halfSize; i++) {
@@ -19,7 +37,6 @@ export function detectPitch(buffer: Float32Array, sampleRate: number): number | 
     yinBuffer[tau] = diff;
   }
 
-  // Step 2: Cumulative mean normalized difference function
   yinBuffer[0] = 1;
   let runningSum = 0;
   for (let tau = 1; tau < halfSize; tau++) {
@@ -27,7 +44,6 @@ export function detectPitch(buffer: Float32Array, sampleRate: number): number | 
     yinBuffer[tau] *= tau / (runningSum || 1);
   }
 
-  // Step 3: Absolute threshold
   let tau = -1;
   for (let t = 1; t < halfSize; t++) {
     if (yinBuffer[t] < threshold) {
@@ -36,46 +52,21 @@ export function detectPitch(buffer: Float32Array, sampleRate: number): number | 
     }
   }
 
-  if (tau === -1) {
-    let minVal = 1;
-    for (let t = 1; t < halfSize; t++) {
-      if (yinBuffer[t] < minVal) {
-        minVal = yinBuffer[t];
-        tau = t;
-      }
-    }
-    if (minVal > 0.4) return null;
+  if (tau === -1) return null;
+
+  let frequency = sampleRate / tau;
+
+  // 2. Logica di CORREZIONE per il PIANO
+  if (settings.isQuantized) {
+    const midi = Math.round(69 + 12 * Math.log2(frequency / 440));
+    // Se NO PITCH BEND è attivo, restituiamo la frequenza esatta del tasto
+    return 440 * Math.pow(2, (midi - 69) / 12);
   }
 
-  // Step 4: Parabolic interpolation
-  if (tau > 0 && tau < halfSize - 1) {
-    const s0 = yinBuffer[tau - 1];
-    const s1 = yinBuffer[tau];
-    const s2 = yinBuffer[tau + 1];
-    const denominator = 2 * (2 * s1 - s2 - s0);
-    if (denominator !== 0) {
-      const betterTau = tau + (s2 - s0) / denominator;
-      return sampleRate / betterTau;
-    }
-  }
-
-  return tau > 0 ? sampleRate / tau : null;
+  return frequency;
 }
 
 export function frequencyToMidi(frequency: number): number {
   if (!frequency || frequency <= 0) return 0;
   return Math.round(69 + 12 * Math.log2(frequency / 440));
-}
-
-export function midiToNoteName(midi: number): string {
-  if (midi === null || midi === undefined || isNaN(midi) || !isFinite(midi)) {
-    return "--";
-  }
-  
-  const notes = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
-  const m = Math.round(midi);
-  const octave = Math.floor(m / 12) - 1;
-  const noteIndex = ((m % 12) + 12) % 12;
-  
-  return String(notes[noteIndex]) + String(octave);
 }

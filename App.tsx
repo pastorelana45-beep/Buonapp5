@@ -1,61 +1,78 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import * as Tone from 'tone';
 import { 
-  Music, Settings, Mic, Play, Square, Volume2, Trash2, 
-  Activity, Disc, History, AudioWaveform, Clock, 
-  ChevronRight, XCircle, Mic2, Download, Loader2, Zap, MoveUp, MoveDown
+  Music, Activity, Disc, Square, Download, Trash2, 
+  Layers, Volume2, Settings, Clock, ChevronRight, Zap, Loader2 
 } from 'lucide-react';
-import { INSTRUMENTS } from './constants';
-import { Instrument, WorkstationMode, RecordedNote, StudioSession, ScaleType } from './types';
-import { detectPitch, frequencyToMidi, midiToNoteName } from './services/pitchDetection';
+
+// --- UTILS: PITCH DETECTION & MATH ---
+const calculateRMS = (buffer: Float32Array): number => {
+  let sum = 0;
+  for (let i = 0; i < buffer.length; i++) sum += buffer[i] * buffer[i];
+  return Math.sqrt(sum / buffer.length);
+};
+
+const detectPitch = (buffer: Float32Array, sampleRate: number): number | null => {
+  const SIZE = buffer.length;
+  const maxShift = Math.floor(SIZE / 2);
+  let minSum = Infinity;
+  let bestTau = -1;
+  for (let tau = 50; tau < maxShift; tau++) {
+    let sum = 0;
+    for (let i = 0; i < maxShift; i++) sum += Math.abs(buffer[i] - buffer[i + tau]);
+    if (sum < minSum) { minSum = sum; bestTau = tau; }
+  }
+  return bestTau > 0 ? sampleRate / bestTau : null;
+};
+
+const midiToNoteName = (midi: number): string => {
+  const notes = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+  return notes[midi % 12] + (Math.floor(midi / 12) - 1);
+};
+
+// --- CONFIGURAZIONE STRUMENTI ---
+const INSTRUMENTS = [
+  { id: 'grand-piano', name: 'Grand Piano', category: 'PIANO', url: "https://tonejs.github.io/audio/salamander/A4.mp3" },
+  { id: 'strings', name: 'Cinematic Strings', category: 'STRINGS', url: "https://tonejs.github.io/audio/casio/A1.mp3" },
+  { id: 'brass', name: 'Epic Brass', category: 'BRASS', url: "https://tonejs.github.io/audio/casio/A2.mp3" },
+  { id: 'synth', name: 'Warm Pad', category: 'SYNTH', url: "https://tonejs.github.io/audio/casio/A1.mp3" },
+];
 
 const App: React.FC = () => {
   // --- STATI ---
-  const [selectedInstrument, setSelectedInstrument] = useState<Instrument>(INSTRUMENTS[0]);
-  const [mode, setMode] = useState<WorkstationMode>(WorkstationMode.IDLE);
   const [isStarted, setIsStarted] = useState(false);
-  const [currentMidiNote, setCurrentMidiNote] = useState<number | null>(null);
+  const [mode, setMode] = useState<'IDLE' | 'MIDI'>('IDLE');
   const [isRecording, setIsRecording] = useState(false);
-  const [isPlayingBack, setIsPlayingBack] = useState<string | null>(null);
-  const [sessions, setSessions] = useState<StudioSession[]>([]);
-  const [rmsVolume, setRmsVolume] = useState(0);
+  const [isEpicMode, setIsEpicMode] = useState(true);
+  const [currentNote, setCurrentNote] = useState<string | null>(null);
+  const [selectedInst, setSelectedInst] = useState(INSTRUMENTS[0]);
+  const [sessions, setSessions] = useState<any[]>([]);
   const [bpm, setBpm] = useState(120);
-  const [activeTab, setActiveTab] = useState<'BROWSER' | 'VAULT'>('BROWSER');
-  
-  // --- REFS PER AUDIO ENGINE ---
+  const [isLoaded, setIsLoaded] = useState(false);
+
+  // --- REFS AUDIO ---
   const samplerRef = useRef<Tone.Sampler | null>(null);
-  const lfoFilterRef = useRef<Tone.AutoFilter | null>(null);
   const micRef = useRef<Tone.UserMedia | null>(null);
-  const recorderRef = useRef<Tone.Recorder | null>(null);
   const analyserRef = useRef<Tone.Analyser | null>(null);
+  const recorderRef = useRef<Tone.Recorder | null>(null);
 
-  // --- LOGICA DI DOWNLOAD MP3 ---
-  const downloadSession = async (session: StudioSession) => {
-    const a = document.createElement("a");
-    a.href = session.audioUrl;
-    a.download = `VocalSynth_${new Date(session.timestamp).getTime()}.mp3`;
-    a.click();
-  };
-
-  // --- AUDIO ENGINE INIT ---
-  const initAudio = async () => {
+  // --- INIZIALIZZAZIONE ---
+  const initEngine = async () => {
     await Tone.start();
+    
+    // Catena Effetti "Corposa"
+    const reverb = new Tone.Reverb({ decay: 4, wet: 0.4 }).toDestination();
+    const chorus = new Tone.Chorus(4, 2.5, 0.5).connect(reverb).start();
+    const distortion = new Tone.Distortion(0.15).connect(chorus);
+    
+    const sampler = new Tone.Sampler({
+      urls: { "A4": selectedInst.url },
+      onload: () => setIsLoaded(true)
+    }).connect(distortion);
+
     const mic = new Tone.UserMedia();
     const analyser = new Tone.Analyser('waveform', 1024);
     const recorder = new Tone.Recorder();
-    
-    // Effetto Ritmico (Auto-Filter sincronizzato col BPM)
-    const rhythmFilter = new Tone.AutoFilter({
-      frequency: "4n",
-      baseFrequency: 400,
-      octaves: 2.5,
-      filter: { type: "lowpass" }
-    }).toDestination().start();
-
-    const sampler = new Tone.Sampler({
-      urls: { "C4": "https://tonejs.github.io/audio/salamander/C4.mp3" }, // Fallback
-      onload: () => console.log("Engine Ready")
-    }).connect(rhythmFilter);
 
     await mic.open();
     mic.connect(analyser);
@@ -65,64 +82,52 @@ const App: React.FC = () => {
     micRef.current = mic;
     analyserRef.current = analyser;
     recorderRef.current = recorder;
-    lfoFilterRef.current = rhythmFilter;
-    
+
     setIsStarted(true);
-    startProcessing();
+    requestAnimationFrame(audioLoop);
   };
 
-  // --- LOOP DI ELABORAZIONE (PIANO SEGUITO DA VOCE) ---
-  const startProcessing = () => {
-    const process = () => {
-      if (!analyserRef.current || !samplerRef.current) return;
-      
-      const buffer = analyserRef.current.getValue() as Float32Array;
-      const rms = calculateRMS(buffer);
-      setRmsVolume(rms);
+  // --- AUDIO LOOP ---
+  const audioLoop = () => {
+    if (!analyserRef.current || !samplerRef.current || mode !== 'MIDI') {
+      if (mode !== 'MIDI') { samplerRef.current?.releaseAll(); setCurrentNote(null); }
+      requestAnimationFrame(audioLoop);
+      return;
+    }
 
-      // Threshold per evitare rumore di fondo
-      if (rms > 0.015 && mode === WorkstationMode.MIDI) {
-        const freq = detectPitch(buffer, Tone.getContext().sampleRate);
-        if (freq) {
-          const midi = frequencyToMidi(freq);
-          const note = midiToNoteName(midi);
-          
-          if (note !== currentMidiNote?.toString()) {
-            samplerRef.current.releaseAll();
-            samplerRef.current.triggerAttack(note);
-            setCurrentMidiNote(midi);
-          }
-        }
-      } else {
-        if (currentMidiNote) {
+    const buffer = analyserRef.current.getValue() as Float32Array;
+    const rms = calculateRMS(buffer);
+
+    if (rms > 0.02) {
+      const freq = detectPitch(buffer, Tone.getContext().sampleRate);
+      if (freq) {
+        const midi = Math.round(69 + 12 * Math.log2(freq / 440));
+        const note = midiToNoteName(midi);
+
+        if (note !== currentNote) {
           samplerRef.current.releaseAll();
-          setCurrentMidiNote(null);
+          samplerRef.current.triggerAttack(note);
+          if (isEpicMode) {
+            samplerRef.current.triggerAttack(midiToNoteName(midi - 12), undefined, 0.5);
+          }
+          setCurrentNote(note);
         }
       }
-      requestAnimationFrame(process);
-    };
-    process();
+    } else if (currentNote) {
+      samplerRef.current.releaseAll();
+      setCurrentNote(null);
+    }
+    requestAnimationFrame(audioLoop);
   };
 
-  // --- DIFFERENZIAZIONE STRUMENTI ---
-  const changeInstrument = async (inst: Instrument) => {
-    setSelectedInstrument(inst);
-    if (!samplerRef.current) return;
-
-    // Imposta inviluppi specifici per categoria
-    switch (inst.category) {
-      case 'PIANO':
-        samplerRef.current.set({ attack: 0.005, release: 0.8, curve: "exponential" });
-        break;
-      case 'STRINGS':
-        samplerRef.current.set({ attack: 0.4, release: 2.0, curve: "linear" });
-        break;
-      case 'BRASS':
-        samplerRef.current.set({ attack: 0.08, release: 0.2 });
-        break;
-      default:
-        samplerRef.current.set({ attack: 0.1, release: 1.0 });
-    }
+  // --- LOGICA STRUMENTI E FILE ---
+  const changeInstrument = (inst: any) => {
+    setIsLoaded(false);
+    setSelectedInst(inst);
+    samplerRef.current?.add("A4", inst.url, () => setIsLoaded(true));
+    
+    const settings = inst.category === 'STRINGS' ? { attack: 0.6, release: 2 } : { attack: 0.01, release: 1 };
+    samplerRef.current?.set(settings);
   };
 
   const toggleRecording = async () => {
@@ -134,89 +139,78 @@ const App: React.FC = () => {
       setIsRecording(false);
       if (blob) {
         const url = URL.createObjectURL(blob);
-        const newSession: StudioSession = {
-          id: Math.random().toString(),
-          timestamp: Date.now(),
-          audioUrl: url,
-          instrumentId: selectedInstrument.id,
-          midiNotes: [],
-          bpm, scale: 'CHROMATIC'
-        };
-        setSessions([newSession, ...sessions]);
-        setActiveTab('VAULT');
+        setSessions(prev => [{ id: Date.now(), url, time: new Date().toLocaleTimeString() }, ...prev]);
       }
     }
   };
 
   return (
-    <div className="fixed inset-0 bg-black text-white flex flex-col font-sans">
-      {/* Header */}
-      <header className="p-4 border-b border-white/10 flex justify-between items-center bg-zinc-950">
+    <div className="fixed inset-0 bg-black text-white font-sans flex flex-col overflow-hidden">
+      {/* HEADER */}
+      <header className="p-4 bg-zinc-950 border-b border-white/10 flex justify-between items-center z-50">
         <div className="flex items-center gap-2">
-          <div className="p-2 bg-purple-600 rounded-lg"><Music size={20} /></div>
-          <h1 className="font-black tracking-tighter uppercase">VocalSynth <span className="text-purple-500">PRO</span></h1>
+          <div className="w-8 h-8 bg-purple-600 rounded-lg flex items-center justify-center"><Music size={18}/></div>
+          <h1 className="font-black uppercase tracking-tighter">VocalSynth<span className="text-purple-500">Ultra</span></h1>
         </div>
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2 bg-zinc-900 px-3 py-1 rounded-full border border-white/5">
-            <Clock size={12} className="text-zinc-500" />
-            <input type="number" value={bpm} onChange={e => setBpm(Number(e.target.value))} className="bg-transparent w-8 text-[10px] font-bold outline-none" />
-            <span className="text-[10px] text-zinc-500">BPM</span>
-          </div>
-        </div>
+        <button 
+          onClick={() => setIsEpicMode(!isEpicMode)}
+          className={`px-4 py-1.5 rounded-full text-[10px] font-black transition-all flex items-center gap-2 ${isEpicMode ? 'bg-orange-500 text-white' : 'bg-zinc-800 text-zinc-500'}`}
+        >
+          <Layers size={14} /> {isEpicMode ? 'EPIC LAYER' : 'SIMPLE'}
+        </button>
       </header>
 
       {!isStarted ? (
-        <div className="flex-1 flex flex-col items-center justify-center p-10">
-          <h2 className="text-6xl font-black italic mb-8">READY?</h2>
-          <button onClick={initAudio} className="bg-white text-black px-12 py-6 rounded-full font-black text-xl shadow-2xl hover:scale-105 transition-transform">INITIALIZE ENGINE</button>
+        <div className="flex-1 flex flex-col items-center justify-center p-10 text-center">
+          <Zap size={64} className="text-purple-500 mb-6 animate-pulse" />
+          <h2 className="text-4xl font-black italic mb-2 tracking-tighter">ULTRA ENGINE</h2>
+          <p className="text-zinc-500 text-xs mb-10 uppercase tracking-widest">High Definition Vocal Processing</p>
+          <button onClick={initEngine} className="bg-white text-black px-12 py-5 rounded-2xl font-black text-xl shadow-2xl active:scale-95 transition-all">BOOT SYSTEM</button>
         </div>
       ) : (
-        <main className="flex-1 flex flex-col p-4 overflow-hidden">
-          {/* Visualizer */}
-          <div className="h-12 flex items-end gap-[2px] mb-6 opacity-50">
-            {Array.from({ length: 40 }).map((_, i) => (
-              <div key={i} className="flex-1 bg-purple-500 rounded-t-sm transition-all" style={{ height: `${Math.random() * rmsVolume * 1000}%` }} />
-            ))}
-          </div>
-
-          {/* Azioni Principali */}
+        <main className="flex-1 flex flex-col p-4 overflow-hidden relative">
+          {/* Controls */}
           <div className="grid grid-cols-2 gap-4 mb-6">
-            <button onClick={() => setMode(mode === WorkstationMode.MIDI ? WorkstationMode.IDLE : WorkstationMode.MIDI)} className={`p-6 rounded-3xl flex flex-col items-center gap-2 border-2 transition-all ${mode === WorkstationMode.MIDI ? 'bg-purple-600 border-purple-400 shadow-lg shadow-purple-900/40' : 'bg-zinc-900 border-transparent'}`}>
-              <Activity /> <span className="text-[10px] font-black uppercase">Midi Live</span>
+            <button 
+              onClick={() => setMode(mode === 'MIDI' ? 'IDLE' : 'MIDI')}
+              className={`p-6 rounded-3xl border-2 flex flex-col items-center gap-2 transition-all ${mode === 'MIDI' ? 'bg-purple-600 border-purple-400' : 'bg-zinc-900 border-transparent text-zinc-500'}`}
+            >
+              <Activity size={24} /> <span className="font-black text-[10px] uppercase">Midi Live</span>
             </button>
-            <button onClick={toggleRecording} className={`p-6 rounded-3xl flex flex-col items-center gap-2 border-2 transition-all ${isRecording ? 'bg-red-600 border-red-400 animate-pulse' : 'bg-zinc-900 border-transparent'}`}>
-              {isRecording ? <Square fill="white" /> : <Disc />} <span className="text-[10px] font-black uppercase">{isRecording ? 'Stop' : 'Record'}</span>
+            <button 
+              onClick={toggleRecording}
+              className={`p-6 rounded-3xl border-2 flex flex-col items-center gap-2 transition-all ${isRecording ? 'bg-red-600 border-red-400 animate-pulse' : 'bg-zinc-900 border-transparent text-zinc-500'}`}
+            >
+              {isRecording ? <Square fill="white" size={24} /> : <Disc size={24} />} 
+              <span className="font-black text-[10px] uppercase">{isRecording ? 'Stop Rec' : 'Record'}</span>
             </button>
           </div>
 
-          {/* Tabs */}
-          <div className="flex gap-2 mb-4">
-            <button onClick={() => setActiveTab('BROWSER')} className={`flex-1 py-2 text-[10px] font-black uppercase rounded-lg ${activeTab === 'BROWSER' ? 'bg-zinc-800 text-white' : 'text-zinc-500'}`}>Instruments</button>
-            <button onClick={() => setActiveTab('VAULT')} className={`flex-1 py-2 text-[10px] font-black uppercase rounded-lg ${activeTab === 'VAULT' ? 'bg-zinc-800 text-white' : 'text-zinc-500'}`}>Vault ({sessions.length})</button>
-          </div>
+          {/* Selector */}
+          <div className="flex-1 overflow-y-auto space-y-4 pb-24 no-scrollbar">
+            <div className="grid grid-cols-2 gap-2">
+              {INSTRUMENTS.map(inst => (
+                <button 
+                  key={inst.id} 
+                  onClick={() => changeInstrument(inst)}
+                  className={`p-4 rounded-2xl border-2 text-left transition-all ${selectedInst.id === inst.id ? 'bg-zinc-800 border-purple-500' : 'bg-zinc-900/50 border-transparent'}`}
+                >
+                  <p className="font-black text-[10px] uppercase truncate">{inst.name}</p>
+                  <p className="text-[8px] text-zinc-600 uppercase">{inst.category}</p>
+                </button>
+              ))}
+            </div>
 
-          {/* Content Area */}
-          <div className="flex-1 overflow-y-auto pr-2 space-y-2">
-            {activeTab === 'BROWSER' ? (
-              <div className="grid grid-cols-2 gap-2">
-                {INSTRUMENTS.map(inst => (
-                  <button key={inst.id} onClick={() => changeInstrument(inst)} className={`p-4 rounded-2xl border-2 text-left transition-all ${selectedInstrument.id === inst.id ? 'bg-purple-900/40 border-purple-500' : 'bg-zinc-900/50 border-transparent'}`}>
-                    <p className="text-[10px] font-black uppercase truncate">{inst.name}</p>
-                    <span className="text-[8px] text-zinc-500 uppercase">{inst.category}</span>
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <div className="space-y-3">
+            {/* Vault */}
+            {sessions.length > 0 && (
+              <div className="space-y-2 mt-6">
+                <p className="text-[10px] font-black text-zinc-500 uppercase px-2">Vault (MP3 Export)</p>
                 {sessions.map(s => (
                   <div key={s.id} className="p-4 bg-zinc-900 rounded-2xl flex justify-between items-center border border-white/5">
-                    <div>
-                      <p className="text-[10px] font-black uppercase">Take #{s.id.slice(0, 4)}</p>
-                      <p className="text-[8px] text-zinc-500">{new Date(s.timestamp).toLocaleTimeString()}</p>
-                    </div>
+                    <span className="text-[10px] font-black">TAKE {s.time}</span>
                     <div className="flex gap-2">
-                      <button onClick={() => downloadSession(s)} className="p-2 bg-emerald-600 rounded-lg"><Download size={14} /></button>
-                      <button onClick={() => setSessions(prev => prev.filter(x => x.id !== s.id))} className="p-2 bg-zinc-800 rounded-lg"><Trash2 size={14} /></button>
+                      <button onClick={() => { const a = document.createElement('a'); a.href = s.url; a.download = `VocalSynth_${s.id}.mp3`; a.click(); }} className="p-2 bg-emerald-600 text-white rounded-lg"><Download size={14}/></button>
+                      <button onClick={() => setSessions(sessions.filter(x => x.id !== s.id))} className="p-2 bg-zinc-800 text-zinc-500 rounded-lg"><Trash2 size={14}/></button>
                     </div>
                   </div>
                 ))}
@@ -226,15 +220,16 @@ const App: React.FC = () => {
         </main>
       )}
 
-      {/* Dock Inferiore per Note Name */}
+      {/* FOOTER NOTE STATUS */}
       {isStarted && (
         <div className="p-6 bg-zinc-950 border-t border-white/10 flex justify-between items-center">
-          <div className="flex flex-col">
-            <span className="text-[8px] font-black text-zinc-500 uppercase">Current Pitch</span>
-            <span className="text-3xl font-black text-purple-500 italic">{currentMidiNote ? midiToNoteName(currentMidiNote) : '--'}</span>
+          <div>
+            <span className="text-[8px] font-black text-zinc-600 uppercase">Input Pitch</span>
+            <div className="text-4xl font-black italic text-purple-500 leading-none">{currentNote || '--'}</div>
           </div>
-          <div className="h-10 w-10 rounded-full border-4 border-zinc-800 flex items-center justify-center">
-            <div className={`w-4 h-4 rounded-full ${currentMidiNote ? 'bg-purple-500 shadow-[0_0_10px_purple]' : 'bg-zinc-800'}`} />
+          {!isLoaded && <Loader2 className="animate-spin text-purple-500" />}
+          <div className="w-20 h-1 bg-zinc-900 rounded-full overflow-hidden">
+             <div className="h-full bg-purple-600 transition-all" style={{ width: `${Math.min(100, rmsVolume * 800)}%` }} />
           </div>
         </div>
       )}
@@ -243,9 +238,3 @@ const App: React.FC = () => {
 };
 
 export default App;
-
-function calculateRMS(buffer: Float32Array): number {
-  let sum = 0;
-  for (let i = 0; i < buffer.length; i++) sum += buffer[i] * buffer[i];
-  return Math.sqrt(sum / buffer.length);
-}
